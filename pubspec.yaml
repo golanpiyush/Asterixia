@@ -28,6 +28,7 @@ dependencies:
   # State Management & Utilities
   provider:
   vector_math:
+  permission_handler:
   
   # UI
   google_fonts:
@@ -40,7 +41,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
- 
+  flutter_launcher_icons:
   flutter_lints: ^5.0.0
 
 
@@ -63,3 +64,9 @@ flutter:
   #       - asset: fonts/TrajanPro.ttf
   #       - asset: fonts/TrajanPro_Bold.ttf
   #         weight: 700
+
+flutter_icons:
+  android: true
+  image_path_android: "assets/icons/app_icon.png" # path to PNG
+  adaptive_icon_background: "#00002C" 
+  adaptive_icon_foreground: "assets/icons/app_iconfg.png" # foreground (your logo)

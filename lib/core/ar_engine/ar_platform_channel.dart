@@ -19,11 +19,12 @@ class ARPlatformChannel {
   static Function(Map<String, dynamic>)? onSessionInitialized;
   static Function(String)? onError;
   static Function(double, double, double)? onCameraTransform;
-  static Function(Map<String, dynamic>)? onNodeTapped;
+  static Function(String nodeId, String name)? onCelestialBodyTapped;
+  static Function(bool enabled, double intensity)? onNightModeChanged;
 
   /// Initialize AR session
   static Future<bool> initializeARSession({
-    bool enablePlaneDetection = true,
+    bool enablePlaneDetection = false,
     bool enableLightEstimation = true,
     bool enableAutoFocus = true,
   }) async {
@@ -60,33 +61,6 @@ class ARPlatformChannel {
     );
   }
 
-  /// Add an axis line (rotation axis)
-  static Future<String?> addAxisLine({
-    required String name,
-    required String bodyName,
-    required double length,
-    required double tilt,
-    required int color,
-    bool showRotation = false,
-  }) async {
-    try {
-      final nodeId = await _channel.invokeMethod('addAxisLine', {
-        'name': name,
-        'bodyName': bodyName,
-        'length': length,
-        'tilt': tilt,
-        'color': color,
-        'showRotation': showRotation,
-      });
-
-      Logger.ar('Added axis line: $name');
-      return nodeId as String?;
-    } catch (e) {
-      Logger.error('Failed to add axis line', error: e);
-      return null;
-    }
-  }
-
   static void _handleAREvent(AREvent event) {
     switch (event.type) {
       case AREventType.sessionInitialized:
@@ -98,8 +72,16 @@ class ARPlatformChannel {
         final z = event.data['z'] as double;
         onCameraTransform?.call(x, y, z);
         break;
-      case AREventType.nodeTapped:
-        onNodeTapped?.call(event.data);
+      case AREventType.celestialBodyTapped:
+        final nodeId = event.data['id'] as String;
+        final name = event.data['name'] as String;
+        onCelestialBodyTapped?.call(nodeId, name);
+        Logger.ar('Celestial body tapped: $name');
+        break;
+      case AREventType.nightModeChanged:
+        final enabled = event.data['enabled'] as bool;
+        final intensity = event.data['intensity'] as double;
+        onNightModeChanged?.call(enabled, intensity);
         break;
       case AREventType.error:
         onError?.call(event.data['message'] as String);
@@ -107,7 +89,7 @@ class ARPlatformChannel {
     }
   }
 
-  /// Add a celestial body node
+  /// Add a celestial body node with distance-based scaling
   static Future<String?> addCelestialBody({
     required String name,
     required double x,
@@ -117,6 +99,8 @@ class ARPlatformChannel {
     required int color,
     required String type, // 'sun', 'moon', 'planet', 'star'
     double glowIntensity = 0.5,
+    double realDistance =
+        0.0, // Distance from Earth (AU for planets, km for Moon)
   }) async {
     try {
       final nodeId = await _channel.invokeMethod('addCelestialBody', {
@@ -128,9 +112,12 @@ class ARPlatformChannel {
         'color': color,
         'type': type,
         'glowIntensity': glowIntensity,
+        'realDistance': realDistance,
       });
 
-      Logger.ar('Added celestial body: $name with ID: $nodeId');
+      Logger.ar(
+        'Added celestial body: $name with ID: $nodeId (distance: $realDistance)',
+      );
       return nodeId as String?;
     } on PlatformException catch (e) {
       Logger.error('Failed to add celestial body', error: e);
@@ -188,6 +175,64 @@ class ARPlatformChannel {
     }
   }
 
+  /// Add an orbital path for planets
+  static Future<String?> addOrbitalPath({
+    required String planetName,
+    required double centerX,
+    required double centerY,
+    required double centerZ,
+    required double semiMajorAxis,
+    required double semiMinorAxis,
+    required double inclination,
+    required int color,
+  }) async {
+    try {
+      final nodeId = await _channel.invokeMethod('addOrbitalPath', {
+        'planetName': planetName,
+        'centerX': centerX,
+        'centerY': centerY,
+        'centerZ': centerZ,
+        'semiMajorAxis': semiMajorAxis,
+        'semiMinorAxis': semiMinorAxis,
+        'inclination': inclination,
+        'color': color,
+      });
+
+      Logger.ar('Added orbital path for: $planetName');
+      return nodeId as String?;
+    } on PlatformException catch (e) {
+      Logger.error('Failed to add orbital path', error: e);
+      return null;
+    }
+  }
+
+  /// Add an axis line (rotation axis)
+  static Future<String?> addAxisLine({
+    required String name,
+    required String bodyName,
+    required double length,
+    required double tilt,
+    required int color,
+    bool showRotation = false,
+  }) async {
+    try {
+      final nodeId = await _channel.invokeMethod('addAxisLine', {
+        'name': name,
+        'bodyName': bodyName,
+        'length': length,
+        'tilt': tilt,
+        'color': color,
+        'showRotation': showRotation,
+      });
+
+      Logger.ar('Added axis line: $name');
+      return nodeId as String?;
+    } catch (e) {
+      Logger.error('Failed to add axis line', error: e);
+      return null;
+    }
+  }
+
   /// Add a text label
   static Future<String?> addTextLabel({
     required String text,
@@ -214,6 +259,24 @@ class ARPlatformChannel {
     } on PlatformException catch (e) {
       Logger.error('Failed to add text label', error: e);
       return null;
+    }
+  }
+
+  /// Set night mode to dim camera and boost celestial glow
+  static Future<void> setNightMode(
+    bool enabled, {
+    double intensity = 0.3,
+  }) async {
+    try {
+      await _channel.invokeMethod('setNightMode', {
+        'enabled': enabled,
+        'intensity': intensity,
+      });
+      Logger.ar(
+        'Night mode ${enabled ? "enabled" : "disabled"} (intensity: $intensity)',
+      );
+    } on PlatformException catch (e) {
+      Logger.error('Failed to set night mode', error: e);
     }
   }
 
@@ -296,22 +359,6 @@ class ARPlatformChannel {
     }
   }
 
-  /// Set night mode (red filter for astronomy)
-  static Future<void> setNightMode(
-    bool enabled, {
-    double intensity = 0.8,
-  }) async {
-    try {
-      await _channel.invokeMethod('setNightMode', {
-        'enabled': enabled,
-        'intensity': intensity,
-      });
-      Logger.ar('Night mode ${enabled ? "enabled" : "disabled"}');
-    } on PlatformException catch (e) {
-      Logger.error('Failed to set night mode', error: e);
-    }
-  }
-
   /// Dispose resources
   static void dispose() {
     _eventSubscription?.cancel();
@@ -320,7 +367,13 @@ class ARPlatformChannel {
 }
 
 // AR Event Types
-enum AREventType { sessionInitialized, cameraTransform, nodeTapped, error }
+enum AREventType {
+  sessionInitialized,
+  cameraTransform,
+  celestialBodyTapped,
+  nightModeChanged,
+  error,
+}
 
 class AREvent {
   final AREventType type;

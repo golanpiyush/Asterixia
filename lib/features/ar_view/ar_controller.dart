@@ -4,24 +4,27 @@ import 'package:flutter/material.dart';
 import '../../core/services/location_service.dart';
 import '../../core/services/sensor_service.dart';
 import '../../core/ar_engine/ar_platform_channel.dart';
+import '../settings/settings_controller.dart';
 import 'star_overlay.dart';
 import '../../core/utils/logger.dart';
 
 class ARController {
   final LocationService locationService;
   final SensorService sensorService;
+  final SettingsController settingsController;
 
   late StarOverlay _starOverlay;
   late Timer _updateTimer;
+  StreamSubscription<Map<String, dynamic>>? _settingsSubscription;
 
   bool _isInitialized = false;
   bool _isARSessionReady = false;
 
-  // Current settings
-  bool _showGuides = true;
-  bool _showLabels = true;
-
-  ARController({required this.locationService, required this.sensorService});
+  ARController({
+    required this.locationService,
+    required this.sensorService,
+    required this.settingsController,
+  });
 
   /// Initialize the AR controller and session
   Future<void> initialize() async {
@@ -32,12 +35,20 @@ class ARController {
     // Setup AR event callbacks
     _setupARCallbacks();
 
+    // Listen to settings changes
+    _setupSettingsListener();
+
+    // Get AR quality from settings
+    final arQuality = settingsController.arQuality;
+    final enableLightEstimation = arQuality != 'low';
+    final enableAutoFocus = arQuality == 'high';
+
     // Initialize AR session
     final success = await ARPlatformChannel.initializeARSession(
       enablePlaneDetection:
           false, // We don't need plane detection for astronomy
-      enableLightEstimation: true,
-      enableAutoFocus: true,
+      enableLightEstimation: enableLightEstimation,
+      enableAutoFocus: enableAutoFocus,
     );
 
     if (!success) {
@@ -46,7 +57,7 @@ class ARController {
     }
 
     _isInitialized = true;
-    Logger.ar('AR Controller initialized');
+    Logger.ar('AR Controller initialized with quality: $arQuality');
   }
 
   void _setupARCallbacks() {
@@ -68,29 +79,60 @@ class ARController {
       // Logger.ar('Camera position: ($x, $y, $z)');
     };
 
-    // Listen for node tap events
-    ARPlatformChannel.onNodeTapped = (data) {
-      final nodeName = data['nodeName'] as String?;
-      if (nodeName != null) {
-        Logger.ar('Node tapped: $nodeName');
-        _handleNodeTapped(nodeName);
-      }
+    // Listen for celestial body tap events
+    ARPlatformChannel.onCelestialBodyTapped = (nodeId, name) {
+      Logger.ar('Celestial body tapped: $name (ID: $nodeId)');
+      _handleCelestialBodyTapped(nodeId, name);
+    };
+
+    // Listen for night mode changes
+    ARPlatformChannel.onNightModeChanged = (enabled, intensity) {
+      Logger.ar('Night mode changed: $enabled (intensity: $intensity)');
     };
 
     // Start listening to events
     ARPlatformChannel.startListeningToEvents();
   }
 
+  void _setupSettingsListener() {
+    // Listen to settings changes and update the overlay
+    _settingsSubscription = settingsController.settingsStream.listen((
+      settings,
+    ) {
+      if (_isARSessionReady) {
+        Logger.ar('Settings changed, updating overlay...');
+        _updateOverlay();
+
+        // Update night mode in native AR
+        if (settings['nightMode'] == true) {
+          ARPlatformChannel.setNightMode(
+            true,
+            intensity: 1.0 - (settings['brightnessLevel'] ?? 1.0),
+          );
+        } else {
+          ARPlatformChannel.setNightMode(false, intensity: 0.0);
+        }
+      }
+    });
+  }
+
   void _onARSessionReady() {
     Logger.ar('AR Session is ready');
 
-    // Initialize star overlay
+    // Initialize star overlay with settings controller
     _starOverlay = StarOverlay(
       latitude: locationService.latitude,
       longitude: locationService.longitude,
-      showGuides: _showGuides,
-      showLabels: _showLabels,
+      settingsController: settingsController,
     );
+
+    // Apply initial night mode setting
+    if (settingsController.nightMode) {
+      ARPlatformChannel.setNightMode(
+        true,
+        intensity: 1.0 - settingsController.brightnessLevel,
+      );
+    }
 
     // Update the overlay immediately
     _updateOverlay();
@@ -132,10 +174,10 @@ class ARController {
     }
   }
 
-  void _handleNodeTapped(String nodeName) {
+  void _handleCelestialBodyTapped(String nodeId, String name) {
     // Handle celestial body tap events
-    // You can show info dialogs or update UI based on the tapped object
-    Logger.ar('User tapped on: $nodeName');
+    // This is now handled in ar_view_page.dart via the callback
+    Logger.ar('User tapped on: $name (Node ID: $nodeId)');
   }
 
   /// Update location and refresh overlay
@@ -148,8 +190,7 @@ class ARController {
     _starOverlay = StarOverlay(
       latitude: latitude,
       longitude: longitude,
-      showGuides: _showGuides,
-      showLabels: _showLabels,
+      settingsController: settingsController,
     );
 
     _updateOverlay();
@@ -160,17 +201,7 @@ class ARController {
     if (!_isARSessionReady) return;
 
     Logger.ar('Toggling guides: $show');
-    _showGuides = show;
-
-    // Recreate overlay with new settings
-    _starOverlay = StarOverlay(
-      latitude: locationService.latitude,
-      longitude: locationService.longitude,
-      showGuides: show,
-      showLabels: _showLabels,
-    );
-
-    _updateOverlay();
+    settingsController.updateSetting('showGuides', show);
   }
 
   /// Toggle labels on celestial bodies
@@ -178,17 +209,92 @@ class ARController {
     if (!_isARSessionReady) return;
 
     Logger.ar('Toggling labels: $show');
-    _showLabels = show;
+    settingsController.updateSetting('showLabels', show);
+  }
 
-    // Recreate overlay with new settings
-    _starOverlay = StarOverlay(
-      latitude: locationService.latitude,
-      longitude: locationService.longitude,
-      showGuides: _showGuides,
-      showLabels: show,
+  /// Toggle specific celestial object visibility
+  void toggleCelestialObject(String objectType, bool show) {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Toggling $objectType: $show');
+
+    switch (objectType.toLowerCase()) {
+      case 'planets':
+        settingsController.updateSetting('showPlanets', show);
+        break;
+      case 'sun':
+        settingsController.updateSetting('showSun', show);
+        break;
+      case 'moon':
+        settingsController.updateSetting('showMoon', show);
+        break;
+      case 'stars':
+        settingsController.updateSetting('showStars', show);
+        break;
+      case 'constellations':
+        settingsController.updateSetting('showConstellationLines', show);
+        break;
+      case 'orbits':
+        settingsController.updateSetting('showOrbits', show);
+        break;
+    }
+  }
+
+  /// Set AR quality (low, medium, high)
+  Future<void> setARQuality(String quality) async {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Setting AR quality: $quality');
+    settingsController.updateSetting('arQuality', quality);
+
+    // Restart AR session with new quality settings
+    await pause();
+    ARPlatformChannel.dispose();
+    _isARSessionReady = false;
+    await initialize();
+  }
+
+  /// Toggle night mode
+  void toggleNightMode(bool enabled) {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Toggling night mode: $enabled');
+    settingsController.updateSetting('nightMode', enabled);
+
+    // Update native AR night mode
+    ARPlatformChannel.setNightMode(
+      enabled,
+      intensity: enabled ? (1.0 - settingsController.brightnessLevel) : 0.0,
     );
+  }
 
-    _updateOverlay();
+  /// Set brightness level (0.3 - 2.0)
+  void setBrightness(double level) {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Setting brightness: $level');
+    settingsController.updateSetting('brightnessLevel', level);
+
+    // Update night mode intensity if enabled
+    if (settingsController.nightMode) {
+      ARPlatformChannel.setNightMode(true, intensity: 1.0 - level);
+    }
+  }
+
+  /// Set label size (0.5 - 2.0)
+  void setLabelSize(double size) {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Setting label size: $size');
+    settingsController.updateSetting('labelSize', size);
+  }
+
+  /// Set line thickness (0.5 - 2.0)
+  void setLineThickness(double thickness) {
+    if (!_isARSessionReady) return;
+
+    Logger.ar('Setting line thickness: $thickness');
+    settingsController.updateSetting('lineThickness', thickness);
   }
 
   /// Force refresh the AR scene
@@ -197,6 +303,13 @@ class ARController {
 
     // Clear all existing nodes
     await ARPlatformChannel.clearAllNodes();
+
+    // Recreate star overlay with current settings
+    _starOverlay = StarOverlay(
+      latitude: locationService.latitude,
+      longitude: locationService.longitude,
+      settingsController: settingsController,
+    );
 
     // Update overlay
     await _updateOverlay();
@@ -207,7 +320,11 @@ class ARController {
     if (!_isARSessionReady) return;
 
     Logger.ar('Pausing AR session');
-    _updateTimer.cancel();
+
+    if (_updateTimer.isActive) {
+      _updateTimer.cancel();
+    }
+
     await ARPlatformChannel.pauseSession();
   }
 
@@ -221,15 +338,36 @@ class ARController {
     _updateOverlay();
   }
 
+  /// Get current AR statistics
+  Map<String, dynamic> getARStats() {
+    return {
+      'isInitialized': _isInitialized,
+      'isSessionReady': _isARSessionReady,
+      'hasLocation': locationService.hasLocation,
+      'latitude': locationService.latitude,
+      'longitude': locationService.longitude,
+      'azimuth': sensorService.azimuth,
+      'pitch': sensorService.pitch,
+      'roll': sensorService.roll,
+      'arQuality': settingsController.arQuality,
+      'nightMode': settingsController.nightMode,
+      'brightness': settingsController.brightnessLevel,
+    };
+  }
+
   /// Clean up resources
   void dispose() {
     Logger.ar('Disposing AR Controller');
+
+    _settingsSubscription?.cancel();
 
     if (_updateTimer.isActive) {
       _updateTimer.cancel();
     }
 
+    _starOverlay.dispose();
     ARPlatformChannel.dispose();
+
     _isInitialized = false;
     _isARSessionReady = false;
   }

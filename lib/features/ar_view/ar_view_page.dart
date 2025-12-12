@@ -1,12 +1,17 @@
 // lib/features/ar_view/ar_view_page.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../core/services/location_service.dart';
 import '../../core/services/sensor_service.dart';
+import '../../core/ar_engine/ar_platform_channel.dart';
+import '../settings/settings_controller.dart';
 import 'ar_controller.dart';
 import '../../widgets/loading_indicator.dart';
 import '../../core/constants/app_strings.dart';
 import '../../core/utils/logger.dart';
+import 'dart:io' show Platform;
 
 class ARViewPage extends StatefulWidget {
   const ARViewPage({super.key});
@@ -18,14 +23,14 @@ class ARViewPage extends StatefulWidget {
 class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
   ARController? _arController;
   bool _isARLoaded = false;
-  bool _showGuides = true;
-  bool _showLabels = true;
   String _statusMessage = 'Initializing...';
+  String? _selectedCelestialBody;
 
   @override
   void initState() {
     super.initState();
-
+    WidgetsBinding.instance.addObserver(this);
+    _setupEventListeners();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeServices();
     });
@@ -35,6 +40,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _arController?.dispose();
+    ARPlatformChannel.dispose();
     super.dispose();
   }
 
@@ -54,6 +60,205 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
     }
   }
 
+  void _setupEventListeners() {
+    // Listen for tap events on celestial bodies
+    ARPlatformChannel.onCelestialBodyTapped = (nodeId, name) {
+      setState(() {
+        _selectedCelestialBody = name;
+      });
+      _showCelestialBodyInfo(name);
+    };
+
+    // Start listening to AR events
+    ARPlatformChannel.startListeningToEvents();
+  }
+
+  void _showCelestialBodyInfo(String name) {
+    final info = _getCelestialBodyInfo(name);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              _getCelestialBodyIcon(name),
+              color: _getCelestialBodyColor(name),
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            Text(name, style: GoogleFonts.cabin(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                info['description'] ?? 'No description available',
+                style: GoogleFonts.cabin(fontSize: 15),
+              ),
+              const SizedBox(height: 16),
+              if (info['distance'] != null) ...[
+                _buildInfoRow('Distance', info['distance']!),
+                const SizedBox(height: 8),
+              ],
+              if (info['diameter'] != null) ...[
+                _buildInfoRow('Diameter', info['diameter']!),
+                const SizedBox(height: 8),
+              ],
+              if (info['type'] != null) ...[
+                _buildInfoRow('Type', info['type']!),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close', style: GoogleFonts.cabin()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 80,
+          child: Text(
+            '$label:',
+            style: GoogleFonts.cabin(
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(value, style: GoogleFonts.cabin(color: Colors.black54)),
+        ),
+      ],
+    );
+  }
+
+  Map<String, String> _getCelestialBodyInfo(String name) {
+    final infoMap = {
+      'Sun': {
+        'description':
+            'The Sun is the star at the center of our Solar System. It provides light and heat to Earth.',
+        'distance': '149.6 million km (1 Astronomical Unit)',
+        'diameter': '1.39 million km',
+        'type': 'G-type main-sequence star',
+      },
+      'Moon': {
+        'description':
+            'Earth\'s only natural satellite. It affects tides and has been visited by humans.',
+        'distance': '384,400 km from Earth',
+        'diameter': '3,474 km',
+        'type': 'Natural satellite',
+      },
+      'Mercury': {
+        'description':
+            'The smallest planet in our Solar System and closest to the Sun.',
+        'distance': '0.39 AU (Astronomical Unit) from Sun',
+        'diameter': '4,879 km',
+        'type': 'Rocky planet',
+      },
+      'Venus': {
+        'description':
+            'Often called Earth\'s twin due to similar size. Hottest planet with thick atmosphere.',
+        'distance': '0.72 AU (Astronomical Unit) from Sun',
+        'diameter': '12,104 km',
+        'type': 'Rocky planet',
+      },
+      'Earth': {
+        'description': 'Our home planet. The only known world with life.',
+        'distance': '1.0 AU (Astronomical Unit) from Sun',
+        'diameter': '12,742 km',
+        'type': 'Rocky planet',
+      },
+      'Mars': {
+        'description': 'The Red Planet. Target for future human exploration.',
+        'distance': '1.52 AU (Astronomical Unit) from Sun',
+        'diameter': '6,779 km',
+        'type': 'Rocky planet',
+      },
+      'Jupiter': {
+        'description':
+            'The largest planet in our Solar System. A gas giant with a Great Red Spot.',
+        'distance': '5.2 AU (Astronomical Unit) from Sun',
+        'diameter': '139,820 km',
+        'type': 'Gas giant',
+      },
+      'Saturn': {
+        'description': 'Known for its beautiful ring system. A gas giant.',
+        'distance': '9.5 AU (Astronomical Unit) from Sun',
+        'diameter': '116,460 km',
+        'type': 'Gas giant',
+      },
+      'Uranus': {
+        'description': 'An ice giant that rotates on its side.',
+        'distance': '19.2 AU (Astronomical Unit) from Sun',
+        'diameter': '50,724 km',
+        'type': 'Ice giant',
+      },
+      'Neptune': {
+        'description':
+            'The farthest planet from the Sun. An ice giant with strong winds.',
+        'distance': '30.1 AU (Astronomical Unit) from Sun',
+        'diameter': '49,244 km',
+        'type': 'Ice giant',
+      },
+    };
+
+    return infoMap[name] ??
+        {'description': 'A celestial object in the sky.', 'type': 'Unknown'};
+  }
+
+  IconData _getCelestialBodyIcon(String name) {
+    switch (name.toLowerCase()) {
+      case 'sun':
+        return Icons.wb_sunny;
+      case 'moon':
+        return Icons.nightlight_round;
+      case 'earth':
+        return Icons.public;
+      default:
+        return Icons.circle;
+    }
+  }
+
+  Color _getCelestialBodyColor(String name) {
+    switch (name.toLowerCase()) {
+      case 'sun':
+        return Colors.orange;
+      case 'moon':
+        return Colors.grey;
+      case 'mercury':
+        return Colors.brown;
+      case 'venus':
+        return Colors.amber;
+      case 'earth':
+        return Colors.blue;
+      case 'mars':
+        return Colors.red;
+      case 'jupiter':
+        return Colors.orange.shade300;
+      case 'saturn':
+        return Colors.yellow.shade700;
+      case 'uranus':
+        return Colors.cyan;
+      case 'neptune':
+        return Colors.blue.shade900;
+      default:
+        return Colors.white;
+    }
+  }
+
   Future<void> _initializeServices() async {
     setState(() {
       _statusMessage = 'Initializing services...';
@@ -65,6 +270,10 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
         listen: false,
       );
       final sensorService = Provider.of<SensorService>(context, listen: false);
+      final settingsController = Provider.of<SettingsController>(
+        context,
+        listen: false,
+      );
 
       // Initialize location service
       await locationService.initialize();
@@ -102,6 +311,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
       _arController = ARController(
         locationService: locationService,
         sensorService: sensorService,
+        settingsController: settingsController,
       );
 
       await _arController!.initialize();
@@ -124,24 +334,14 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final locationService = Provider.of<LocationService>(context);
     final sensorService = Provider.of<SensorService>(context);
+    final settingsController = Provider.of<SettingsController>(context);
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // AR View (native camera view rendered in background)
-          // The actual AR rendering happens on the native side
-          Container(
-            color: Colors.black,
-            child: Center(
-              child: _isARLoaded
-                  ? const Text(
-                      '📱 AR Camera Active',
-                      style: TextStyle(color: Colors.white24, fontSize: 16),
-                    )
-                  : null,
-            ),
-          ),
+          // Native AR Camera View
+          _buildARCameraView(),
 
           // Loading overlay
           if (!_isARLoaded)
@@ -155,7 +355,10 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
                     const SizedBox(height: 20),
                     Text(
                       _statusMessage,
-                      style: const TextStyle(color: Colors.white),
+                      style: GoogleFonts.cabin(
+                        color: Colors.white,
+                        fontSize: 16,
+                      ),
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -171,11 +374,19 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
 
           // Status overlay
           if (!locationService.isLoading && _isARLoaded)
-            _buildStatusOverlay(locationService, sensorService),
+            _buildStatusOverlay(
+              locationService,
+              sensorService,
+              settingsController,
+            ),
 
           // Controls overlay
           if (_isARLoaded)
-            Positioned(top: 40, right: 20, child: _buildControls()),
+            Positioned(
+              top: 40,
+              right: 20,
+              child: _buildControls(settingsController),
+            ),
 
           // Info button
           if (_isARLoaded)
@@ -183,6 +394,46 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  Widget _buildARCameraView() {
+    if (Platform.isIOS) {
+      return UiKitView(
+        viewType: 'com.example.astronomy_ar/arview',
+        creationParams: <String, dynamic>{
+          'enablePlaneDetection': false,
+          'enableLightEstimation': true,
+          'enableAutoFocus': true,
+        },
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (int id) {
+          Logger.ar('iOS AR View created with ID: $id');
+        },
+      );
+    } else if (Platform.isAndroid) {
+      return AndroidView(
+        viewType: 'com.example.astronomy_ar/arview',
+        creationParams: <String, dynamic>{
+          'enablePlaneDetection': false,
+          'enableLightEstimation': true,
+          'enableAutoFocus': true,
+        },
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (int id) {
+          Logger.ar('Android AR View created with ID: $id');
+        },
+      );
+    } else {
+      return Container(
+        color: Colors.black,
+        child: Center(
+          child: Text(
+            'AR not supported on this platform',
+            style: GoogleFonts.cabin(color: Colors.white, fontSize: 16),
+          ),
+        ),
+      );
+    }
   }
 
   Widget _buildErrorOverlay(String error) {
@@ -201,7 +452,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
             const Icon(Icons.error_outline, color: Colors.white),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(error, style: const TextStyle(color: Colors.white)),
+              child: Text(error, style: GoogleFonts.cabin(color: Colors.white)),
             ),
           ],
         ),
@@ -209,7 +460,11 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildStatusOverlay(LocationService location, SensorService sensor) {
+  Widget _buildStatusOverlay(
+    LocationService location,
+    SensorService sensor,
+    SettingsController settings,
+  ) {
     return Positioned(
       bottom: 20,
       left: 20,
@@ -236,7 +491,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
                 Expanded(
                   child: Text(
                     '${location.latitude.toStringAsFixed(4)}°, ${location.longitude.toStringAsFixed(4)}°',
-                    style: const TextStyle(
+                    style: GoogleFonts.cabin(
                       color: Colors.white,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -252,7 +507,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Text(
                   '${sensor.getDirectionName()} (${sensor.azimuth.toStringAsFixed(0)}°)',
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  style: GoogleFonts.cabin(color: Colors.white70, fontSize: 14),
                 ),
               ],
             ),
@@ -267,20 +522,30 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Text(
                   'Pitch: ${sensor.pitch.toStringAsFixed(0)}° | Roll: ${sensor.roll.toStringAsFixed(0)}°',
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  style: GoogleFonts.cabin(color: Colors.white70, fontSize: 14),
                 ),
               ],
             ),
             const Divider(color: Colors.white24, height: 20),
             Row(
               children: [
-                const Icon(Icons.wb_sunny, color: Colors.yellow, size: 20),
+                Icon(
+                  settings.nightMode ? Icons.nightlight : Icons.wb_sunny,
+                  color: settings.nightMode
+                      ? Colors.blue.shade200
+                      : Colors.yellow,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    AppStrings.pointingAtSky,
-                    style: const TextStyle(
-                      color: Colors.yellowAccent,
+                    settings.nightMode
+                        ? 'Night mode: Enhanced glow'
+                        : AppStrings.pointingAtSky,
+                    style: GoogleFonts.cabin(
+                      color: settings.nightMode
+                          ? Colors.blue.shade200
+                          : Colors.yellowAccent,
                       fontSize: 13,
                       fontStyle: FontStyle.italic,
                     ),
@@ -288,13 +553,24 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
                 ),
               ],
             ),
+            if (_selectedCelestialBody != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Selected: $_selectedCelestialBody',
+                style: GoogleFonts.cabin(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildControls() {
+  Widget _buildControls(SettingsController settings) {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -304,27 +580,31 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
       ),
       child: Column(
         children: [
+          // Night mode toggle
+          _buildControlButton(
+            icon: settings.nightMode ? Icons.nightlight : Icons.wb_sunny,
+            tooltip: 'Toggle Night Mode',
+            isActive: settings.nightMode,
+            onPressed: () =>
+                _arController?.toggleNightMode(!settings.nightMode),
+          ),
+          const SizedBox(height: 8),
+
           // Toggle guide lines
           _buildControlButton(
-            icon: _showGuides ? Icons.layers : Icons.layers_outlined,
+            icon: settings.showGuides ? Icons.layers : Icons.layers_outlined,
             tooltip: 'Toggle Guide Lines',
-            isActive: _showGuides,
-            onPressed: () {
-              setState(() => _showGuides = !_showGuides);
-              _arController?.toggleGuides(_showGuides);
-            },
+            isActive: settings.showGuides,
+            onPressed: () => _arController?.toggleGuides(!settings.showGuides),
           ),
           const SizedBox(height: 8),
 
           // Toggle labels
           _buildControlButton(
-            icon: _showLabels ? Icons.label : Icons.label_outline,
+            icon: settings.showLabels ? Icons.label : Icons.label_outline,
             tooltip: 'Toggle Labels',
-            isActive: _showLabels,
-            onPressed: () {
-              setState(() => _showLabels = !_showLabels);
-              _arController?.toggleLabels(_showLabels);
-            },
+            isActive: settings.showLabels,
+            onPressed: () => _arController?.toggleLabels(!settings.showLabels),
           ),
           const SizedBox(height: 8),
 
@@ -391,29 +671,34 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('AR Astronomy Help'),
+        title: Text(
+          'AR Astronomy Help',
+          style: GoogleFonts.cabin(fontWeight: FontWeight.bold),
+        ),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'How to use:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: GoogleFonts.cabin(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               _buildInfoItem('📱', 'Point your phone at the sky'),
+              _buildInfoItem('👆', 'Tap any celestial body to see details'),
               _buildInfoItem('🌟', 'See planets, Sun, and Moon in AR'),
+              _buildInfoItem('🌙', 'Use night mode for better visibility'),
               _buildInfoItem('🔵', 'Blue lines show celestial equator'),
               _buildInfoItem('🟡', 'Yellow lines show ecliptic path'),
               _buildInfoItem('⚪', 'White lines show horizon'),
-              _buildInfoItem('🔄', 'Cyan axes show planetary rotation'),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'Controls:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: GoogleFonts.cabin(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
+              _buildInfoItem('🌙', 'Toggle night mode'),
               _buildInfoItem('📐', 'Toggle guide lines'),
               _buildInfoItem('🏷️', 'Toggle object labels'),
               _buildInfoItem('🔄', 'Refresh the AR scene'),
@@ -423,7 +708,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Got it!'),
+            child: Text('Got it!', style: GoogleFonts.cabin()),
           ),
         ],
       ),
@@ -437,7 +722,7 @@ class _ARViewPageState extends State<ARViewPage> with WidgetsBindingObserver {
         children: [
           Text(emoji, style: const TextStyle(fontSize: 20)),
           const SizedBox(width: 12),
-          Expanded(child: Text(text)),
+          Expanded(child: Text(text, style: GoogleFonts.cabin())),
         ],
       ),
     );

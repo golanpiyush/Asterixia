@@ -1,26 +1,21 @@
-// android/app/src/main/kotlin/com/astronomy/ar/MainActivity.kt
+// android/app/src/main/kotlin/com/example/asterixia/MainActivity.kt
 package com.example.asterixia
 
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
-import android.view.View
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.exceptions.UnavailableException
-import com.example.asterixia.AREngineHandler
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
-import android.opengl.GLSurfaceView
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
-import android.os.Handler
-import android.os.Looper
 
 class MainActivity : FlutterActivity() {
     private val METHOD_CHANNEL = "com.astronomy.ar/engine"
@@ -31,22 +26,25 @@ class MainActivity : FlutterActivity() {
     private lateinit var eventChannel: EventChannel
     private var eventSink: EventChannel.EventSink? = null
     
-    private var arEngineHandler: AREngineHandler? = null
-    private var glSurfaceView: GLSurfaceView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    
-    private var isARSessionActive = false
     private var userRequestedInstall = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Check ARCore availability
         checkARCoreAvailability()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Register ARView platform view factory
+        flutterEngine
+            .platformViewsController
+            .registry
+            .registerViewFactory(
+                "com.example.astronomy_ar/arview",
+                ARViewFactory()
+            )
 
         // Setup Method Channel
         methodChannel = MethodChannel(
@@ -57,7 +55,7 @@ class MainActivity : FlutterActivity() {
         methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "initializeARSession" -> {
-                    val enablePlaneDetection = call.argument<Boolean>("enablePlaneDetection") ?: true
+                    val enablePlaneDetection = call.argument<Boolean>("enablePlaneDetection") ?: false
                     val enableLightEstimation = call.argument<Boolean>("enableLightEstimation") ?: true
                     val enableAutoFocus = call.argument<Boolean>("enableAutoFocus") ?: true
                     
@@ -71,32 +69,85 @@ class MainActivity : FlutterActivity() {
                 
                 "addCelestialBody" -> {
                     val name = call.argument<String>("name") ?: ""
-                    val x = call.argument<Double>("x") ?: 0.0
-                    val y = call.argument<Double>("y") ?: 0.0
-                    val z = call.argument<Double>("z") ?: 0.0
-                    val scale = call.argument<Double>("scale") ?: 1.0
-                    val color = call.argument<Int>("color") ?: Color.WHITE
+                    val x = call.argument<Double>("x")?.toFloat() ?: 0f
+                    val y = call.argument<Double>("y")?.toFloat() ?: 0f
+                    val z = call.argument<Double>("z")?.toFloat() ?: 0f
+                    val scale = call.argument<Double>("scale")?.toFloat() ?: 1f
+                    val colorInt = (call.argument<Any>("color") as? Number)?.toInt() ?: Color.WHITE
+                    val glowIntensity = call.argument<Double>("glowIntensity")?.toFloat() ?: 0.5f
                     val type = call.argument<String>("type") ?: "planet"
-                    val glowIntensity = call.argument<Double>("glowIntensity") ?: 0.5
+                    val realDistance = call.argument<Double>("realDistance") ?: 0.0
                     
-                    val nodeId = arEngineHandler?.addCelestialBody(
-                        name, x, y, z, scale, color, type, glowIntensity
+                    // Convert Android color to RGBA float array
+                    val color = floatArrayOf(
+                        Color.red(colorInt) / 255f,
+                        Color.green(colorInt) / 255f,
+                        Color.blue(colorInt) / 255f,
+                        Color.alpha(colorInt) / 255f
                     )
-                    result.success(nodeId)
+                    
+                    val arView = ARViewRegistry.getLatestView()
+                    val nodeId = arView?.addCelestialBody(
+                        name, x, y, z, scale, color, glowIntensity, type, realDistance
+                    )
+                    result.success(nodeId ?: "")
                 }
                 
-                "addAxisLine" -> {
+                "addConstellationLine" -> {
                     val name = call.argument<String>("name") ?: ""
-                    val bodyName = call.argument<String>("bodyName") ?: ""
-                    val length = call.argument<Double>("length") ?: 1.0
-                    val tilt = call.argument<Double>("tilt") ?: 0.0
-                    val color = call.argument<Int>("color") ?: Color.CYAN
-                    val showRotation = call.argument<Boolean>("showRotation") ?: true
+                    val points = call.argument<List<Map<String, Double>>>("points") ?: emptyList()
+                    val colorInt = (call.argument<Any>("color") as? Number)?.toInt() ?: Color.WHITE
+                    val width = call.argument<Double>("width")?.toFloat() ?: 0.005f
                     
-                    val nodeId = arEngineHandler?.addAxisLine(
-                        name, bodyName, length, tilt, color, showRotation
+                    // Convert color
+                    val color = floatArrayOf(
+                        Color.red(colorInt) / 255f,
+                        Color.green(colorInt) / 255f,
+                        Color.blue(colorInt) / 255f,
+                        Color.alpha(colorInt) / 255f
                     )
-                    result.success(nodeId)
+                    
+                    // Convert points to float arrays
+                    val floatPoints = points.map { point ->
+                        floatArrayOf(
+                            point["x"]?.toFloat() ?: 0f,
+                            point["y"]?.toFloat() ?: 0f,
+                            point["z"]?.toFloat() ?: 0f
+                        )
+                    }
+                    
+                    val arView = ARViewRegistry.getLatestView()
+                    val nodeId = arView?.addGuideLine(name, floatPoints, color, width)
+                    result.success(nodeId ?: "")
+                }
+                
+                "addGuideCircle" -> {
+                    val name = call.argument<String>("name") ?: ""
+                    val radius = call.argument<Double>("radius") ?: 1.0
+                    val colorInt = (call.argument<Any>("color") as? Number)?.toInt() ?: Color.YELLOW
+                    val thickness = call.argument<Double>("thickness")?.toFloat() ?: 0.01f
+                    
+                    // Convert color
+                    val color = floatArrayOf(
+                        Color.red(colorInt) / 255f,
+                        Color.green(colorInt) / 255f,
+                        Color.blue(colorInt) / 255f,
+                        Color.alpha(colorInt) / 255f
+                    )
+                    
+                    // Create circle points
+                    val points = mutableListOf<FloatArray>()
+                    val segments = 100
+                    for (i in 0..segments) {
+                        val angle = (i.toDouble() / segments) * 2.0 * Math.PI
+                        val x = radius * Math.cos(angle)
+                        val z = radius * Math.sin(angle)
+                        points.add(floatArrayOf(x.toFloat(), 0f, z.toFloat()))
+                    }
+                    
+                    val arView = ARViewRegistry.getLatestView()
+                    val nodeId = arView?.addGuideLine(name, points, color, thickness)
+                    result.success(nodeId ?: "")
                 }
                 
                 "addOrbitalPath" -> {
@@ -107,107 +158,100 @@ class MainActivity : FlutterActivity() {
                     val semiMajorAxis = call.argument<Double>("semiMajorAxis") ?: 1.0
                     val semiMinorAxis = call.argument<Double>("semiMinorAxis") ?: 1.0
                     val inclination = call.argument<Double>("inclination") ?: 0.0
-                    val color = call.argument<Int>("color") ?: Color.WHITE
+                    val colorInt = (call.argument<Any>("color") as? Number)?.toInt() ?: Color.WHITE
                     
-                    val nodeId = arEngineHandler?.addOrbitalPath(
-                        planetName, centerX, centerY, centerZ,
-                        semiMajorAxis, semiMinorAxis, inclination, color
+                    // Convert color
+                    val color = floatArrayOf(
+                        Color.red(colorInt) / 255f,
+                        Color.green(colorInt) / 255f,
+                        Color.blue(colorInt) / 255f,
+                        Color.alpha(colorInt) / 255f
                     )
-                    result.success(nodeId)
-                }
-                
-                "addConstellationLine" -> {
-                    val name = call.argument<String>("name") ?: ""
-                    val points = call.argument<List<Map<String, Double>>>("points") ?: emptyList()
-                    val color = call.argument<Int>("color") ?: Color.WHITE
-                    val width = call.argument<Double>("width") ?: 0.005
                     
-                    val nodeId = arEngineHandler?.addGuideLine(
-                        name, points, color, width, false
-                    )
-                    result.success(nodeId)
-                }
-                
-                "addGuideCircle" -> {
-                    val name = call.argument<String>("name") ?: ""
-                    val radius = call.argument<Double>("radius") ?: 1.0
-                    val color = call.argument<Int>("color") ?: Color.YELLOW
-                    val thickness = call.argument<Double>("thickness") ?: 0.01
-                    val tilt = call.argument<Double>("tilt") ?: 0.0
-                    val rotation = call.argument<Double>("rotation") ?: 0.0
-                    
-                    // Create circle points
-                    val points = mutableListOf<Map<String, Double>>()
+                    // Create elliptical orbit points
+                    val points = mutableListOf<FloatArray>()
                     val segments = 360
-                    for (i in 0 until segments) {
-                        val angle = (i * 360.0 / segments) * Math.PI / 180.0
-                        val x = radius * Math.cos(angle)
-                        val z = radius * Math.sin(angle)
-                        points.add(mapOf("x" to x, "y" to 0.0, "z" to z))
-                    }
-                    points.add(points[0]) // Close the circle
                     
-                    val nodeId = arEngineHandler?.addGuideLine(
-                        name, points, color, thickness, false
-                    )
-                    result.success(nodeId)
+                    for (i in 0..segments) {
+                        val angle = (i.toDouble() / segments) * 2.0 * Math.PI
+                        
+                        val x = semiMajorAxis * Math.cos(angle)
+                        val z = semiMinorAxis * Math.sin(angle)
+                        
+                        // Apply inclination
+                        val incRad = Math.toRadians(inclination)
+                        val y = z * Math.sin(incRad)
+                        val zFinal = z * Math.cos(incRad)
+                        
+                        points.add(floatArrayOf(
+                            (centerX + x).toFloat(),
+                            (centerY + y).toFloat(),
+                            (centerZ + zFinal).toFloat()
+                        ))
+                    }
+                    
+                    val arView = ARViewRegistry.getLatestView()
+                    val nodeId = arView?.addGuideLine("${planetName}_orbit", points, color, 0.005f)
+                    result.success(nodeId ?: "")
+                }
+                
+                "addAxisLine" -> {
+                    // Not fully implemented yet - placeholder
+                    result.success("")
                 }
                 
                 "addTextLabel" -> {
-                    val text = call.argument<String>("text") ?: ""
-                    val x = call.argument<Double>("x") ?: 0.0
-                    val y = call.argument<Double>("y") ?: 0.0
-                    val z = call.argument<Double>("z") ?: 0.0
-                    val color = call.argument<Int>("color") ?: Color.WHITE
-                    val fontSize = call.argument<Double>("fontSize") ?: 0.1
-                    val billboarding = call.argument<Boolean>("billboarding") ?: true
-                    
-                    val nodeId = arEngineHandler?.addTextLabel(
-                        text, x, y, z, color, fontSize, billboarding
-                    )
-                    result.success(nodeId)
+                    // Not fully implemented yet - placeholder
+                    result.success("")
                 }
                 
                 "updateNodePosition" -> {
-                    val nodeId = call.argument<String>("nodeId") ?: ""
-                    val x = call.argument<Double>("x") ?: 0.0
-                    val y = call.argument<Double>("y") ?: 0.0
-                    val z = call.argument<Double>("z") ?: 0.0
-                    
-                    val success = arEngineHandler?.updateNodePosition(nodeId, x, y, z) ?: false
-                    result.success(success)
+                    // Not fully implemented yet - placeholder
+                    result.success(false)
                 }
                 
                 "removeNode" -> {
-                    val nodeId = call.argument<String>("nodeId") ?: ""
-                    val success = arEngineHandler?.removeNode(nodeId) ?: false
-                    result.success(success)
+                    // Not fully implemented yet - placeholder
+                    result.success(false)
                 }
                 
                 "clearAllNodes" -> {
-                    arEngineHandler?.clearAllNodes()
+                    // Clear by recreating the AR view
+                    result.success(true)
+                }
+                
+                "setNightMode" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    val intensity = call.argument<Double>("intensity")?.toFloat() ?: 0.3f
+                    
+                    val arView = ARViewRegistry.getLatestView()
+                    arView?.setNightMode(enabled, intensity)
+                    
+                    mainHandler.post {
+                        eventSink?.success(mapOf(
+                            "type" to "nightModeChanged",
+                            "data" to mapOf(
+                                "enabled" to enabled,
+                                "intensity" to intensity
+                            )
+                        ))
+                    }
+                    
                     result.success(true)
                 }
                 
                 "pauseSession" -> {
-                    arEngineHandler?.pauseSession()
+                    ARViewRegistry.getLatestView()?.pause()
                     result.success(null)
                 }
                 
                 "resumeSession" -> {
-                    arEngineHandler?.resumeSession()
+                    ARViewRegistry.getLatestView()?.resume()
                     result.success(null)
                 }
                 
                 "takeScreenshot" -> {
                     // TODO: Implement screenshot capture
-                    result.success(null)
-                }
-                
-                "setNightMode" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    val intensity = call.argument<Double>("intensity") ?: 0.8
-                    // TODO: Implement night mode filter
                     result.success(null)
                 }
                 
@@ -224,12 +268,23 @@ class MainActivity : FlutterActivity() {
         eventChannel.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 eventSink = events
-                arEngineHandler?.setEventSink(events)
+                
+                // Setup tap callback to send events to Flutter
+                ARViewRegistry.getLatestView()?.setTapCallback { nodeId, name ->
+                    mainHandler.post {
+                        events?.success(mapOf(
+                            "type" to "celestialBodyTapped",
+                            "data" to mapOf(
+                                "id" to nodeId,
+                                "name" to name
+                            )
+                        ))
+                    }
+                }
             }
 
             override fun onCancel(arguments: Any?) {
                 eventSink = null
-                arEngineHandler?.setEventSink(null)
             }
         })
     }
@@ -238,11 +293,10 @@ class MainActivity : FlutterActivity() {
         try {
             when (ArCoreApk.getInstance().checkAvailability(this)) {
                 ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
-                    // ARCore is installed and supported
+                    // ARCore is installed and ready
                 }
                 ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD,
                 ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
-                    // Request ARCore installation
                     try {
                         val installStatus = ArCoreApk.getInstance()
                             .requestInstall(this, userRequestedInstall)
@@ -278,7 +332,7 @@ class MainActivity : FlutterActivity() {
         enableAutoFocus: Boolean,
         result: MethodChannel.Result
     ) {
-        // Check camera permission
+        // Check camera permission first
         if (!hasCameraPermission()) {
             requestCameraPermission()
             result.error("PERMISSION_DENIED", "Camera permission not granted", null)
@@ -286,63 +340,30 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            // Initialize AR Engine Handler
-            if (arEngineHandler == null) {
-                arEngineHandler = AREngineHandler(this)
-            }
-
-            // Initialize AR session
-            val success = arEngineHandler?.initializeSession(
-                enablePlaneDetection,
-                enableLightEstimation,
-                enableAutoFocus
-            ) ?: false
-
-            if (success) {
-                isARSessionActive = true
-                setupRenderLoop()
+            val arView = ARViewRegistry.getLatestView()
+            if (arView != null) {
+                // Configure the AR session
+                arView.configureSession(
+                    enablePlaneDetection,
+                    enableLightEstimation,
+                    enableAutoFocus
+                )
+                
+                // Send success event to Flutter
+                mainHandler.post {
+                    eventSink?.success(mapOf(
+                        "type" to "sessionInitialized",
+                        "data" to mapOf("success" to true)
+                    ))
+                }
+                
                 result.success(true)
             } else {
-                result.error("INIT_FAILED", "Failed to initialize AR session", null)
+                result.error("NO_VIEW", "AR view not found. Make sure ARViewWidget is displayed first.", null)
             }
         } catch (e: Exception) {
             result.error("INIT_ERROR", "Error initializing AR: ${e.message}", null)
         }
-    }
-
-    private fun setupRenderLoop() {
-        // Create GLSurfaceView for rendering
-        glSurfaceView = GLSurfaceView(this).apply {
-            setEGLContextClientVersion(2)
-            setEGLConfigChooser(8, 8, 8, 8, 16, 0)
-            setRenderer(object : GLSurfaceView.Renderer {
-                private var lastFrameTime = System.currentTimeMillis()
-
-                override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-                    // OpenGL initialization
-                }
-
-                override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-                    // Handle surface changes
-                }
-
-                override fun onDrawFrame(gl: GL10?) {
-                    val currentTime = System.currentTimeMillis()
-                    val deltaTime = (currentTime - lastFrameTime) / 1000f
-                    lastFrameTime = currentTime
-
-                    // Update AR session
-                    arEngineHandler?.update(deltaTime)
-                    
-                    // Render AR content
-                    arEngineHandler?.render()
-                }
-            })
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-        }
-
-        // Note: In a real implementation, you'd need to properly integrate
-        // this with Flutter's rendering pipeline or use a platform view
     }
 
     private fun hasCameraPermission(): Boolean {
@@ -370,37 +391,28 @@ class MainActivity : FlutterActivity() {
         if (requestCode == CAMERA_PERMISSION_CODE) {
             if (grantResults.isNotEmpty() && 
                 grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Camera permission granted", Toast.LENGTH_SHORT).show()
+                mainHandler.post {
+                    Toast.makeText(this, "Camera permission granted. Please try again.", Toast.LENGTH_SHORT).show()
+                    
+                    eventSink?.success(mapOf(
+                        "type" to "permissionGranted",
+                        "data" to mapOf("permission" to "camera")
+                    ))
+                }
             } else {
-                showError("Camera permission is required for AR")
+                showError("Camera permission is required for AR functionality")
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
-        
-        if (isARSessionActive) {
-            arEngineHandler?.resumeSession()
-            glSurfaceView?.onResume()
-        }
+        ARViewRegistry.getLatestView()?.resume()
     }
 
     override fun onPause() {
         super.onPause()
-        
-        if (isARSessionActive) {
-            arEngineHandler?.pauseSession()
-            glSurfaceView?.onPause()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        
-        arEngineHandler?.dispose()
-        arEngineHandler = null
-        isARSessionActive = false
+        ARViewRegistry.getLatestView()?.pause()
     }
 
     private fun showError(message: String) {

@@ -1,3 +1,5 @@
+import 'package:asterixia/core/services/permission_service.dart';
+import 'package:asterixia/widgets/location_permission_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:asterixia/core/services/location_service.dart';
@@ -48,6 +50,14 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
     const StarMapPage(),
     const SettingsPage(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LocationPermissionSheet.show(context);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
